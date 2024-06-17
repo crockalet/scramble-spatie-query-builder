@@ -8,6 +8,10 @@ use Dedoc\Scramble\Infer\Services\FileParser;
 use Dedoc\Scramble\Support\Generator\Operation;
 use Dedoc\Scramble\Support\Generator\Parameter;
 use Dedoc\Scramble\Support\Generator\Schema;
+use Dedoc\Scramble\Support\Generator\Types\ArrayType;
+use Dedoc\Scramble\Support\Generator\Types\BooleanType;
+use Dedoc\Scramble\Support\Generator\Types\IntegerType;
+use Dedoc\Scramble\Support\Generator\Types\ObjectType;
 use Dedoc\Scramble\Support\Generator\Types\StringType;
 use Dedoc\Scramble\Support\RouteInfo;
 use PhpParser\Node;
@@ -66,21 +70,143 @@ class Extension extends OperationExtension
                 continue;
             }
 
-            $parameter = new Parameter($feature->getQueryParameterKey(), 'query');
+            if($feature->getMethodName() == Feature::AllowedFiltersMethod || $feature->getMethodName() == Feature::AllowedFieldsMethod){            $values = $this->inferValues($methodCall, $routeInfo);
+                foreach ($values as $value) {
+                    $parameter = new Parameter($feature->getQueryParameterKey()."[$value]", 'query');
+                    // Step 1: Check the suffix of each key
+                    $suffix = substr($value, -2);
 
-            $parameter->setSchema(
-                Schema::fromType(new StringType())
-            );
-
-            $feature->setValues($this->inferValues($methodCall, $routeInfo));
-
-            $parameter->example($feature->getExample());
-
-            $halt = $this->runHooks($operation, $parameter, $feature);
-
-            if (! $halt) {
-                $operation->addParameters([$parameter]);
+                    $dynamicValue = "";
+                    $dynamicType = new StringType();
+                    // Step 2: Determine the value based on the suffix
+                    switch ($suffix) {
+                        case 'at':
+                            $dynamicValue = date('Y-m-d H:i:s'); // Current date and time
+                            break;
+                        case 'id':
+                            $dynamicValue = rand(1, 1000); // Random integer
+                            $dynamicType = new IntegerType();
+                            break;
+                        case 'ed':
+                        case 'ng':
+                            $dynamicValue = (bool)rand(0, 1); // Random boolean
+                            $dynamicType = new BooleanType();
+                            break;
+                        // Add more cases as needed
+                        default:
+                            $dynamicValue = null;
+                            break;
+                    }
+                    $parameter->setSchema(
+                        Schema::fromType($dynamicType)
+                    );
+        
+                    $feature->setValues([$dynamicValue]);
+        
+                    $parameter->example($dynamicValue);
+        
+                    $halt = $this->runHooks($operation, $parameter, $feature);
+        
+                    if (! $halt) {
+                        $operation->addParameters([$parameter]);
+                    }
+                }
+            }else{
+                $parameter = new Parameter($feature->getQueryParameterKey(), 'query');
+                $stringType = new StringType();
+                $values = $this->inferValues($methodCall, $routeInfo);
+                shuffle($values);
+                $examples = [];
+                if($feature->getMethodName() == Feature::AllowedIncludesMethod){
+                    $stringType->setDescription("Comma separated list of relationships to include.");
+                    $examples[] = $values[0] ? $values[0] : '';
+                    $examples[] = implode(',', $values);
+                }else{
+                    $stringType->setDescription("Comma separated list of values. Prefix with '-' to exclude.");
+                    $examples[] = $values[0] ? $values[0] : '';
+                    $examples[] = '-'.$values[count($values)-1];
+                }
+                $stringType->examples($examples);
+                $parameter->setSchema(
+                    Schema::fromType($stringType)
+                );
+                $feature->setValues($examples);
+                $parameter->example($examples[0]);
+                $halt = $this->runHooks($operation, $parameter, $feature);
+    
+                if (! $halt) {
+                    $operation->addParameters([$parameter]);
+                }
             }
+            /*if($feature->getMethodName() == Feature::AllowedFiltersMethod || $feature->getMethodName() == Feature::AllowedFieldsMethod){
+                $values = $this->inferValues($methodCall, $routeInfo);
+                $objectParam = new ObjectType();
+                foreach ($values as $value) {
+                    // Step 1: Check the suffix of each key
+                    $suffix = substr($value, -2);
+
+                    $dynamicValue = "";
+                    $dynamicType = new StringType();
+                    // Step 2: Determine the value based on the suffix
+                    switch ($suffix) {
+                        case 'at':
+                            $dynamicValue = date('Y-m-d H:i:s'); // Current date and time
+                            break;
+                        case 'id':
+                            $dynamicValue = rand(1, 1000); // Random integer
+                            $dynamicType = new IntegerType();
+                            break;
+                        case 'ed':
+                        case 'ng':
+                            $dynamicValue = (bool)rand(0, 1); // Random boolean
+                            $dynamicType = new BooleanType();
+                            break;
+                        // Add more cases as needed
+                        default:
+                            $dynamicValue = null;
+                            break;
+                    }
+                    $dynamicType->example($dynamicValue);
+                    $objectParam->addProperty($value, $dynamicType);
+                    // $feature->setValues([$dynamicValue]);
+                    
+                }
+                $parameter = new Parameter($feature->getQueryParameterKey(), 'query');
+                $parameter->setSchema(
+                    Schema::fromType($objectParam)
+                );
+                $halt = $this->runHooks($operation, $parameter, $feature);
+    
+                if (! $halt) {
+                    $operation->addParameters([$parameter]);
+                }
+             }else{
+                $parameter = new Parameter($feature->getQueryParameterKey(), 'query');
+                $arrayType = new ArrayType();
+                $values = $this->inferValues($methodCall, $routeInfo);
+                if($feature->getMethodName() == Feature::AllowedIncludesMethod){
+                    $enums = $values;
+                }else{
+                    $enums = [];
+                    foreach ($values as $value) {
+                        // Add the value as is
+                        $enums[] = $value;
+                        // Add the value with a "-" prefix
+                        $enums[] = "-$value";
+                    }
+                }
+                // $arrayType->setAdditionalItems(Schema::fromType((new StringType())->enum($enums)));
+                $arrayType->enum($enums);
+                // $arrayType->setMin(0);
+                $parameter->setSchema(
+                    Schema::fromType($arrayType)
+                );
+                $feature->setValues($values);
+                $halt = $this->runHooks($operation, $parameter, $feature);
+                if (! $halt) {
+                    $operation->addParameters([$parameter]);
+                }
+             }*/
         }
     }
 
@@ -253,5 +379,34 @@ class Extension extends OperationExtension
             default:
                 return self::NOT_SUPPORTED_KEY;
         }
+    }
+
+    public function inferTypeAndValueFromKey(string $key){
+        // Step 1: Check the suffix of each key
+        $suffix = substr($key, -2);
+        $dynamicType = new StringType();
+        // Step 2: Determine the value based on the suffix
+        switch ($suffix) {
+            case 'at':
+                $dynamicValue = date('Y-m-d H:i:s'); // Current date and time
+                break;
+            case 'id':
+                $dynamicValue = rand(1, 1000); // Random integer
+                $dynamicType = new IntegerType();
+                break;
+            case 'ed':
+            case 'ng':
+                $dynamicValue = (bool)rand(0, 1); // Random boolean
+                $dynamicType = new BooleanType();
+                break;
+            // Add more cases as needed
+            default:
+                $dynamicValue = null;
+                break;
+        }
+        return [
+            'type' => $dynamicType,
+            'value' => $dynamicValue
+        ];
     }
 }
