@@ -14,6 +14,7 @@ use Dedoc\Scramble\Support\Generator\Types\IntegerType;
 use Dedoc\Scramble\Support\Generator\Types\ObjectType;
 use Dedoc\Scramble\Support\Generator\Types\StringType;
 use Dedoc\Scramble\Support\RouteInfo;
+use Exception;
 use PhpParser\Node;
 use PhpParser\NodeFinder;
 
@@ -52,6 +53,62 @@ class Extension extends OperationExtension
         ];
     }
 
+    public function getStructureComments(RouteInfo $routeInfo){
+        $items = $routeInfo->phpDoc()->children;
+        // dd($items);
+            $queryParamValues = array_map(function($item) {
+                if ($item instanceof \PHPStan\PhpDocParser\Ast\PhpDoc\PhpDocTagNode && $item->name === '@queryParam') {
+                    return $item->value->value;
+                }
+            }, array_filter($items, function($item) {
+                return $item instanceof \PHPStan\PhpDocParser\Ast\PhpDoc\PhpDocTagNode && $item->name === '@queryParam';
+            }));
+            // dd($queryParamValues);
+            $structuredParams = array_map(function($param) {
+                // Normalize the input to handle line breaks and multiple spaces
+                $param = preg_replace('/\s+/', ' ', $param);
+            
+                // Initialize an array to hold the structured parameter data
+                $structuredParam = [
+                    'type' => null,
+                    'name' => null,
+                    'description' => null,
+                    'examples' => [], // Initialize as an empty array for multiple examples
+                    'enum' => [] // Initialize as an empty array for enum values
+                ];
+            
+                // Extract type and name
+                if (preg_match('/^(\w+)\s+([\w\[\]]+)/', $param, $matches)) {
+                    $structuredParam['type'] = $matches[1];
+                    $structuredParam['name'] = $matches[2];
+                }
+            
+                // Extract and accumulate examples
+                if (preg_match_all('/@example\s+([^\s@]+)/', $param, $exampleMatches)) {
+                    foreach ($exampleMatches[1] as $example) {
+                        $structuredParam['examples'][] = trim($example);
+                    }
+                }
+            
+                // Extract enum values
+                if (preg_match('/@enum\s+([^\n]+)/', $param, $enumMatches)) {
+                    // Split the matched enum values string by commas and trim each value
+                    $enumValues = array_map('trim', explode(',', $enumMatches[1]));
+                    $structuredParam['enum'] = $enumValues;
+                }
+            
+                // Extract description by removing type, name, examples, and enum from the original string
+                $description = preg_replace('/^(\w+)\s+([\w\[\]]+)|@example\s+[^\s@]+|@enum\s+[^\s@]+/', '', $param);
+                $description = preg_replace('/\s*-\s*/', '', $description);
+                $description = trim($description);
+                if (!empty($description)) {
+                    $structuredParam['description'] = $description;
+                }
+            
+                return $structuredParam;
+            }, $queryParamValues);
+            return $structuredParams;
+    }
     public function handle(Operation $operation, RouteInfo $routeInfo)
     {
         foreach ($this->features() as $feature) {
@@ -69,10 +126,13 @@ class Extension extends OperationExtension
             if (! $methodCall) {
                 continue;
             }
-
+            $structuredParams = $this->getStructureComments($routeInfo);
+            // dd($structuredParams);
             if($feature->getMethodName() == Feature::AllowedFiltersMethod || $feature->getMethodName() == Feature::AllowedFieldsMethod){            $values = $this->inferValues($methodCall, $routeInfo);
                 foreach ($values as $value) {
-                    $parameter = new Parameter($feature->getQueryParameterKey()."[$value]", 'query');
+                    $key = $feature->getQueryParameterKey()."[$value]";
+                    $parameter = new Parameter($key, 'query');
+
                     // Step 1: Check the suffix of each key
                     $suffix = substr($value, -2);
 
@@ -84,26 +144,59 @@ class Extension extends OperationExtension
                             $dynamicValue = date('Y-m-d H:i:s'); // Current date and time
                             break;
                         case 'id':
-                            $dynamicValue = rand(1, 1000); // Random integer
                             $dynamicType = new IntegerType();
+                            $dynamicValue = rand(1, 1000); // Random integer
                             break;
                         case 'ed':
                         case 'ng':
-                            $dynamicValue = (bool)rand(0, 1); // Random boolean
                             $dynamicType = new BooleanType();
-                            break;
-                        // Add more cases as needed
-                        default:
-                            $dynamicValue = null;
+                            $dynamicValue = (bool)rand(0, 1); // Random boolean
                             break;
                     }
+                    $dynamicType->example($dynamicValue);
+        
+                    // TODO: if the parameter is already defined in the structuredParams, update the description and example
+                    foreach($structuredParams as $param){
+                        if($param['name'] == $key){
+                            switch($param['type']){
+                                case 'string':
+                                    $dynamicType = new StringType();
+                                    if($param['enum']){
+                                        $dynamicType->enum($param['enum']);
+                                    }
+                                    break;
+                                case 'integer':
+                                    $dynamicType = new IntegerType();
+                                    break;
+                                case 'boolean':
+                                    $dynamicType = new BooleanType();
+                                    break;
+                            }
+                            if($param['description']){
+                                $dynamicType->setDescription($param['description']);
+                            }
+                            // $parameter->description($param['description'] ? $param['description'] : '');
+                            if($param['examples']){
+                                $dynamicType->examples($param['examples']);
+                                $parameter->example($param['examples'][0]);
+                            }
+                            // $dynamicValue =  $param['examples'] ? $param['examples'] : $dynamicValue;
+                        }
+                    }
+                    // $feature->setValues([$dynamicValue]);
+        
+                    // if($dynamicValue){
+                    //     if(is_array($dynamicValue) && count($dynamicValue) > 1){
+                    //         $parameter->example($dynamicValue[0]);
+                    //         $dynamicType->examples($dynamicValue);
+                    //     }else{
+                    //         $parameter->example($dynamicValue);
+                    //         $dynamicType->example($dynamicValue);
+                    //     }
+                    // }
                     $parameter->setSchema(
                         Schema::fromType($dynamicType)
                     );
-        
-                    $feature->setValues([$dynamicValue]);
-        
-                    $parameter->example($dynamicValue);
         
                     $halt = $this->runHooks($operation, $parameter, $feature);
         
@@ -236,7 +329,32 @@ class Extension extends OperationExtension
 
         // ->allowedIncludes(['posts', 'posts.author'])
         if ($methodCall->args[0]->value instanceof Node\Expr\Array_) {
-            return array_map(fn (Node\Expr\ArrayItem $item) => $item->value->value, $methodCall->args[0]->value->items);
+            $values = [];
+            foreach($methodCall->args[0]->value->items as $item){
+                if($item->value instanceof Node\Scalar\String_){
+                    $values[] = $item->value->value;
+                }elseif($item->value instanceof Node\Expr\StaticCall && $item->value->class->name == "Spatie\QueryBuilder\AllowedFilter"){
+                    switch($item->value->name->name){
+                        case "scope":
+                            $values[] = $item->value->args[0]->value->value;
+                            break;
+                        case "autoDetect":
+                            $values[] = $item->value->args[1]->value->value;
+                            break;
+                        case "callback":
+                        case "partial":
+                        case "custom":
+                        case "exact":
+                        case "beginsWithStrict":
+                        case "endsWithStrict":
+                            $values[] = $item->value->args[0]->value->value;
+                            break;
+                    }
+                    // $values[] = $this->inferValueFromStaticCall($item->value);
+                }
+            }
+            return $values;
+            // return array_map(fn (Node\Expr\ArrayItem $item) => $item->value->value, $methodCall->args[0]->value->items);
         }
 
         // ->allowedIncludes('posts', 'posts.author')
