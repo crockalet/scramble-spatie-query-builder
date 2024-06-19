@@ -85,8 +85,18 @@ class Extension extends OperationExtension
             
                 // Extract and accumulate examples
                 if (preg_match_all('/@example\s+([^\s@]+)/', $param, $exampleMatches)) {
+                    $structuredParam['examples'] = []; // Ensure the examples array is initialized
                     foreach ($exampleMatches[1] as $example) {
-                        $structuredParam['examples'][] = trim($example);
+                        // Check if the example starts with a quote
+                        if (substr($example, 0, 1) === '"' || substr($example, 0, 1) === "'") {
+                            // Remove the surrounding quotes and add the example as a single item
+                            $structuredParam['examples'][] = trim($example, "\"'");
+                        } else {
+                            // Split by commas and add each trimmed item as an example
+                            foreach (explode(',', $example) as $splitExample) {
+                                $structuredParam['examples'][] = trim($splitExample);
+                            }
+                        }
                     }
                 }
             
@@ -141,7 +151,8 @@ class Extension extends OperationExtension
                     // Step 2: Determine the value based on the suffix
                     switch ($suffix) {
                         case 'at':
-                            $dynamicValue = date('Y-m-d H:i:s'); // Current date and time
+                            $dynamicValue = date('Y-m-d'); // Current date
+                            $dynamicType->format('date');
                             break;
                         case 'id':
                             $dynamicType = new IntegerType();
@@ -211,13 +222,15 @@ class Extension extends OperationExtension
                 shuffle($values);
                 $examples = [];
                 if($feature->getMethodName() == Feature::AllowedIncludesMethod){
+                    $examples = $values;
                     $stringType->setDescription("Comma separated list of relationships to include.");
-                    $examples[] = $values[0] ? $values[0] : '';
-                    $examples[] = implode(',', $values);
+                    // $examples[] = $values[0] ? $values[0] : '';
+                    // $examples[] = implode(',', $values);
                 }else{
                     $stringType->setDescription("Comma separated list of values. Prefix with '-' to exclude.");
-                    $examples[] = $values[0] ? $values[0] : '';
-                    $examples[] = '-'.$values[count($values)-1];
+                    $examples = array_merge(...array_map(function($value) { return [$value, "-$value"]; }, $values));
+                    // $examples[] = $values[0] ? $values[0] : '';
+                    // $examples[] = '-'.$values[count($values)-1];
                 }
                 $stringType->examples($examples);
                 $parameter->setSchema(
