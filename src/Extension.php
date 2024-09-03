@@ -5,6 +5,7 @@ namespace Exonn\ScrambleSpatieQueryBuilder;
 use Dedoc\Scramble\Extensions\OperationExtension;
 use Dedoc\Scramble\Infer\Reflector\ClassReflector;
 use Dedoc\Scramble\Infer\Services\FileParser;
+use Dedoc\Scramble\Support\Generator\MissingExample;
 use Dedoc\Scramble\Support\Generator\Operation;
 use Dedoc\Scramble\Support\Generator\Parameter;
 use Dedoc\Scramble\Support\Generator\Schema;
@@ -237,7 +238,7 @@ class Extension extends OperationExtension
                     Schema::fromType($stringType)
                 );
                 $feature->setValues($examples);
-                $parameter->example($examples[0]);
+                $parameter->example($examples[0] ?? new MissingExample());
                 $halt = $this->runHooks($operation, $parameter, $feature);
     
                 if (! $halt) {
